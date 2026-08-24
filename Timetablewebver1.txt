@@ -1,0 +1,750 @@
+小课表网站源码
+
+技术说明：
+这个网站不是单个静态 HTML 文件，而是一个 React + TypeScript（TSX）网站。
+页面结构和交互写在 TSX 文件中，视觉样式写在 CSS 文件中，并由 Vite 构建。
+浏览器最终运行时仍会生成标准的 HTML、CSS 和 JavaScript。
+
+主要功能：
+1. 周一至周日、每天九节课的课程表。
+2. 点击课程格可填写课程名称、教室和自定义颜色。
+3. 可新增、修改和删除课程。
+4. 数据自动保存在当前浏览器的 localStorage 中。
+
+以下为主要源文件（不包含自动生成的依赖锁文件和构建产物）。
+
+
+================ app/page.tsx ================
+
+'use client';
+
+import { FormEvent, useEffect, useMemo, useState } from 'react';
+
+const DAYS = [
+  { short: 'MON', label: '周一' },
+  { short: 'TUE', label: '周二' },
+  { short: 'WED', label: '周三' },
+  { short: 'THU', label: '周四' },
+  { short: 'FRI', label: '周五' },
+] as const;
+
+const PERIODS = [
+  { number: 1, time: '08:00–08:40', phase: '上午' },
+  { number: 2, time: '09:10–09:50', phase: '上午' },
+  { number: 3, time: '10:00–10:40', phase: '上午' },
+  { number: 4, time: '10:50–11:30', phase: '上午' },
+  { number: 5, time: '12:40–13:20', phase: '下午' },
+  { number: 6, time: '13:30–14:10', phase: '下午' },
+  { number: 7, time: '14:25–15:05', phase: '下午' },
+  { number: 8, time: '15:15–15:55', phase: '下午' },
+  { number: 9, time: '16:05–16:45', phase: '下午' },
+] as const;
+
+const COLORS = [
+  { value: 'mint', label: '薄荷绿' },
+  { value: 'sky', label: '晴空蓝' },
+  { value: 'peach', label: '蜜桃橙' },
+  { value: 'lavender', label: '薰衣草' },
+  { value: 'lemon', label: '柠檬黄' },
+  { value: 'rose', label: '珊瑚粉' },
+] as const;
+
+type Course = {
+  name: string;
+  room: string;
+  color: (typeof COLORS)[number]['value'];
+};
+
+type Schedule = Record<string, Course>;
+type Slot = { day: number; period: number };
+
+const INITIAL_SCHEDULE: Schedule = {
+  '0-0': { name: '高等数学', room: '明理楼 201', color: 'mint' },
+  '2-1': { name: '大学英语', room: '博学楼 305', color: 'sky' },
+  '4-2': { name: '计算机基础', room: '实验楼 A102', color: 'lavender' },
+  '1-4': { name: '中国近代史', room: '致远楼 108', color: 'peach' },
+  '3-6': { name: '体育', room: '东区操场', color: 'lemon' },
+  '0-8': { name: '设计思维', room: '创意工坊 2', color: 'rose' },
+};
+
+const STORAGE_KEY = 'xiaokebiao-schedule-v1';
+
+function slotKey(day: number, period: number) {
+  return `${day}-${period}`;
+}
+
+export default function Home() {
+  const [schedule, setSchedule] = useState<Schedule>(INITIAL_SCHEDULE);
+  const [loaded, setLoaded] = useState(false);
+  const [editing, setEditing] = useState<Slot | null>(null);
+  const [courseName, setCourseName] = useState('');
+  const [room, setRoom] = useState('');
+  const [color, setColor] = useState<Course['color']>('mint');
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(STORAGE_KEY);
+      if (saved) setSchedule(JSON.parse(saved) as Schedule);
+    } catch {
+      // If storage is unavailable, the timetable stays usable in memory.
+    } finally {
+      setLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(schedule));
+    } catch {
+      // Edits still work for the current session if storage is unavailable.
+    }
+  }, [loaded, schedule]);
+
+  useEffect(() => {
+    if (!editing) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setEditing(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [editing]);
+
+  const courseCount = useMemo(() => Object.keys(schedule).length, [schedule]);
+
+  function openEditor(day: number, period: number) {
+    const current = schedule[slotKey(day, period)];
+    setEditing({ day, period });
+    setCourseName(current?.name ?? '');
+    setRoom(current?.room ?? '');
+    setColor(current?.color ?? 'mint');
+  }
+
+  function openFirstAvailable() {
+    for (let period = 0; period < PERIODS.length; period += 1) {
+      for (let day = 0; day < DAYS.length; day += 1) {
+        if (!schedule[slotKey(day, period)]) {
+          openEditor(day, period);
+          return;
+        }
+      }
+    }
+    openEditor(0, 0);
+  }
+
+  function saveCourse(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editing || !courseName.trim()) return;
+    setSchedule((current) => ({
+      ...current,
+      [slotKey(editing.day, editing.period)]: {
+        name: courseName.trim(),
+        room: room.trim(),
+        color,
+      },
+    }));
+    setEditing(null);
+  }
+
+  function deleteCourse() {
+    if (!editing) return;
+    const key = slotKey(editing.day, editing.period);
+    setSchedule((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    setEditing(null);
+  }
+
+  function clearSchedule() {
+    if (courseCount === 0 || !window.confirm('确定要清空所有课程吗？')) return;
+    setSchedule({});
+  }
+
+  const editingCourse = editing ? schedule[slotKey(editing.day, editing.period)] : undefined;
+
+  return (
+    <main className="site-shell">
+      <div className="decor decor-one" aria-hidden="true" />
+      <div className="decor decor-two" aria-hidden="true" />
+
+      <header className="topbar">
+        <a className="brand" href="#timetable" aria-label="小课表首页">
+          <span className="brand-mark" aria-hidden="true">课</span>
+          <span>
+            <strong>小课表</strong>
+            <small>把每一天安排得刚刚好</small>
+          </span>
+        </a>
+        <div className="top-actions">
+          <button className="button button-quiet" type="button" onClick={clearSchedule}>清空课表</button>
+          <button className="button button-primary" type="button" onClick={openFirstAvailable}>
+            <span aria-hidden="true">＋</span> 新增课程
+          </button>
+        </div>
+      </header>
+
+      <section className="intro" aria-labelledby="page-title">
+        <div>
+          <p className="eyebrow"><span /> 我的学习周</p>
+          <h1 id="page-title">这一周，清晰可见</h1>
+          <p className="intro-copy">点击任意格子，填入课程、教室，再选一个喜欢的颜色。</p>
+        </div>
+        <div className="week-summary" aria-label={`本周已有 ${courseCount} 节课程`}>
+          <span className="summary-number">{courseCount}</span>
+          <span>节课程<br /><small>已安排</small></span>
+        </div>
+      </section>
+
+      <section className="schedule-card" id="timetable" aria-label="每周课程表">
+        <div className="schedule-scroll">
+          <div className="schedule-grid">
+            <div className="corner-cell">
+              <span>时间</span>
+              <strong>星期</strong>
+            </div>
+            {DAYS.map((day, index) => (
+              <div className="day-heading" key={day.short}>
+                <span>{day.short}</span>
+                <strong>{day.label}</strong>
+                {index === 0 && <em>今天</em>}
+              </div>
+            ))}
+
+            {PERIODS.map((period, periodIndex) => (
+              <div className={`schedule-row row-${periodIndex + 1}`} key={period.number}>
+                <div className="time-cell">
+                  <span>第 {period.number} 节</span>
+                  <strong>{period.time}</strong>
+                  <small>{period.phase}</small>
+                </div>
+                {DAYS.map((day, dayIndex) => {
+                  const course = schedule[slotKey(dayIndex, periodIndex)];
+                  return (
+                    <button
+                      type="button"
+                      className={`course-slot ${course ? `has-course course-${course.color}` : ''}`}
+                      key={day.short}
+                      onClick={() => openEditor(dayIndex, periodIndex)}
+                      aria-label={course
+                        ? `${day.label}第${period.number}节，${course.name}${course.room ? `，${course.room}` : ''}，点击编辑`
+                        : `${day.label}第${period.number}节，点击添加课程`}
+                    >
+                      {course ? (
+                        <span className="course-content">
+                          <strong>{course.name}</strong>
+                          <small>{course.room || '教室待定'}</small>
+                        </span>
+                      ) : (
+                        <span className="add-hint" aria-hidden="true">＋</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+        <footer className="schedule-footer">
+          <span><i className="status-dot" /> 已自动保存到当前浏览器</span>
+          <span>轻点课程即可修改</span>
+        </footer>
+      </section>
+
+      <p className="page-note">愿每一堂课，都离理想更近一点。</p>
+
+      {editing && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setEditing(null)}>
+          <section
+            className="course-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="modal-heading">
+              <div>
+                <p>{DAYS[editing.day].label} · 第 {PERIODS[editing.period].number} 节</p>
+                <h2 id="modal-title">{editingCourse ? '编辑课程' : '添加课程'}</h2>
+              </div>
+              <button type="button" className="close-button" onClick={() => setEditing(null)} aria-label="关闭">×</button>
+            </div>
+
+            <form onSubmit={saveCourse}>
+              <label className="field">
+                <span>课程名称</span>
+                <input
+                  autoFocus
+                  value={courseName}
+                  onChange={(event) => setCourseName(event.target.value)}
+                  placeholder="例如：高等数学"
+                  maxLength={24}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>上课教室</span>
+                <input
+                  value={room}
+                  onChange={(event) => setRoom(event.target.value)}
+                  placeholder="例如：明理楼 201"
+                  maxLength={32}
+                />
+              </label>
+
+              <fieldset className="color-field">
+                <legend>课程颜色</legend>
+                <div className="color-options">
+                  {COLORS.map((item) => (
+                    <label key={item.value} title={item.label}>
+                      <input
+                        type="radio"
+                        name="course-color"
+                        value={item.value}
+                        checked={color === item.value}
+                        onChange={() => setColor(item.value)}
+                      />
+                      <span className={`color-swatch swatch-${item.value}`}>
+                        <i aria-hidden="true">✓</i>
+                      </span>
+                      <small>{item.label}</small>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
+              <div className="modal-actions">
+                {editingCourse && (
+                  <button className="button button-danger" type="button" onClick={deleteCourse}>删除课程</button>
+                )}
+                <span className="action-spacer" />
+                <button className="button button-quiet" type="button" onClick={() => setEditing(null)}>取消</button>
+                <button className="button button-primary" type="submit">保存课程</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+    </main>
+  );
+}
+
+================ app/globals.css ================
+
+@import 'tailwindcss';
+
+:root {
+  --ink: #20312e;
+  --muted: #71807c;
+  --line: #dfe8e3;
+  --paper: #fffefa;
+  --green: #2f765f;
+  --green-deep: #245d4c;
+  --shadow: 0 22px 60px rgb(46 79 67 / 12%);
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: #f5f7f2;
+  color: var(--ink);
+  font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+}
+button, input { font: inherit; }
+button { color: inherit; }
+
+.site-shell {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+  padding-bottom: 38px;
+  background:
+    radial-gradient(circle at 4% 8%, rgb(126 184 157 / 18%), transparent 22rem),
+    radial-gradient(circle at 95% 28%, rgb(238 190 122 / 16%), transparent 22rem),
+    #f5f7f2;
+}
+.decor { position: absolute; border-radius: 999px; pointer-events: none; filter: blur(1px); opacity: .55; }
+.decor-one { width: 210px; height: 210px; top: 330px; left: -145px; background: #dcece2; }
+.decor-two { width: 150px; height: 150px; top: 130px; right: -100px; background: #fae9cb; }
+
+.topbar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: min(1380px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 25px 0 21px;
+  border-bottom: 1px solid rgb(73 107 95 / 12%);
+}
+.brand { display: flex; align-items: center; gap: 12px; color: inherit; text-decoration: none; }
+.brand-mark {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 13px 13px 13px 5px;
+  background: var(--green);
+  color: white;
+  font-family: Georgia, serif;
+  font-size: 22px;
+  box-shadow: 0 8px 18px rgb(47 118 95 / 22%);
+  transform: rotate(-2deg);
+}
+.brand strong { display: block; font-family: Georgia, "Songti SC", serif; font-size: 21px; letter-spacing: .08em; }
+.brand small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; letter-spacing: .14em; }
+.top-actions { display: flex; align-items: center; gap: 10px; }
+.button {
+  min-height: 42px;
+  padding: 0 17px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: none;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease, background .16s ease;
+}
+.button:hover { transform: translateY(-1px); }
+.button:focus-visible, .course-slot:focus-visible, .close-button:focus-visible, input:focus-visible { outline: 3px solid rgb(47 118 95 / 28%); outline-offset: 2px; }
+.button-primary { background: var(--green); color: white; box-shadow: 0 8px 18px rgb(47 118 95 / 18%); }
+.button-primary:hover { background: var(--green-deep); box-shadow: 0 10px 22px rgb(47 118 95 / 23%); }
+.button-quiet { border-color: #d9e3dd; background: rgb(255 255 255 / 62%); color: #55645f; }
+.button-quiet:hover { border-color: #b9cac1; background: white; }
+.button-danger { border-color: #efd3ce; background: #fff7f5; color: #aa544a; }
+
+.intro {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  width: min(1380px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 45px 2px 26px;
+}
+.eyebrow { display: flex; align-items: center; gap: 9px; margin: 0 0 9px; color: var(--green); font-size: 12px; font-weight: 800; letter-spacing: .18em; }
+.eyebrow span { width: 24px; height: 2px; background: #e4a955; }
+.intro h1 { margin: 0; font-family: Georgia, "Songti SC", serif; font-size: clamp(34px, 4vw, 54px); font-weight: 500; letter-spacing: -.025em; }
+.intro-copy { margin: 11px 0 0; color: var(--muted); font-size: 14px; }
+.week-summary { display: flex; align-items: center; gap: 10px; padding: 10px 16px 10px 12px; border: 1px solid #dce7e1; border-radius: 16px; background: rgb(255 255 255 / 58%); color: #52635d; font-size: 12px; font-weight: 700; line-height: 1.35; }
+.summary-number { font-family: Georgia, serif; color: var(--green); font-size: 32px; line-height: 1; }
+.week-summary small { color: #94a09c; font-size: 10px; font-weight: 600; }
+
+.schedule-card {
+  position: relative;
+  z-index: 1;
+  width: min(1380px, calc(100% - 48px));
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid #dce5df;
+  border-radius: 22px;
+  background: rgb(255 254 250 / 90%);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(12px);
+}
+.schedule-scroll { overflow-x: auto; }
+.schedule-grid { min-width: 920px; font-size: 0; }
+.schedule-row, .corner-cell, .day-heading { font-size: initial; }
+.schedule-grid > .corner-cell, .schedule-grid > .day-heading { display: inline-flex; width: calc((100% - 142px) / 5); vertical-align: top; }
+.schedule-grid > .corner-cell { width: 142px; }
+.corner-cell, .day-heading {
+  height: 74px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: #f9faf6;
+}
+.corner-cell { position: relative; overflow: hidden; gap: 2px; color: #8b9793; }
+.corner-cell::after { content: ''; position: absolute; width: 170px; height: 1px; background: #dfe7e2; transform: rotate(22deg); }
+.corner-cell span { position: absolute; left: 22px; bottom: 15px; z-index: 1; font-size: 10px; letter-spacing: .08em; }
+.corner-cell strong { position: absolute; right: 20px; top: 14px; z-index: 1; color: #53645e; font-size: 12px; }
+.day-heading { position: relative; gap: 5px; }
+.day-heading:last-child { border-right: 0; }
+.day-heading span { color: #a1ada8; font-family: Arial, sans-serif; font-size: 9px; font-weight: 800; letter-spacing: .17em; }
+.day-heading strong { font-family: Georgia, "Songti SC", serif; font-size: 17px; font-weight: 600; }
+.day-heading em { position: absolute; right: 11px; top: 10px; padding: 3px 7px; border-radius: 999px; background: #e2efe8; color: var(--green); font-size: 9px; font-style: normal; font-weight: 800; }
+
+.schedule-row { display: grid; grid-template-columns: 142px repeat(5, minmax(0, 1fr)); min-height: 96px; }
+.schedule-row.row-5 { border-top: 12px solid #edf1ec; }
+.time-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 5px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: #fbfcf8;
+}
+.time-cell span { color: #596a64; font-size: 11px; font-weight: 800; }
+.time-cell strong { color: #32453f; font-family: Georgia, serif; font-size: 13px; font-variant-numeric: tabular-nums; }
+.time-cell small { position: absolute; left: 9px; top: 9px; color: #abb5b1; font-size: 8px; letter-spacing: .08em; writing-mode: vertical-rl; }
+
+.course-slot {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 96px;
+  align-items: stretch;
+  padding: 7px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  cursor: pointer;
+}
+.course-slot:last-child { border-right: 0; }
+.course-slot::after { content: ''; position: absolute; inset: 8px; border: 1px dashed transparent; border-radius: 12px; transition: border-color .16s ease, background .16s ease; }
+.course-slot:not(.has-course):hover::after { border-color: #c5d7cd; background: rgb(226 239 232 / 34%); }
+.add-hint { position: relative; z-index: 1; display: grid; width: 26px; height: 26px; place-items: center; margin: auto; border-radius: 50%; color: transparent; font-size: 18px; transition: color .16s ease, background .16s ease; }
+.course-slot:hover .add-hint { background: #e4efe9; color: var(--green); }
+.course-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: center;
+  flex-direction: column;
+  gap: 7px;
+  padding: 13px 14px 12px 18px;
+  overflow: hidden;
+  border-radius: 11px;
+  text-align: left;
+  transition: transform .16s ease, box-shadow .16s ease;
+}
+.course-content::before { content: ''; position: absolute; left: 7px; top: 15px; bottom: 15px; width: 3px; border-radius: 3px; background: currentColor; opacity: .72; }
+.course-content strong { width: 100%; overflow: hidden; color: #294039; font-size: 13px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+.course-content small { width: 100%; overflow: hidden; color: #667772; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.course-slot:hover .course-content { transform: translateY(-2px); box-shadow: 0 7px 16px rgb(50 78 68 / 10%); }
+.course-mint .course-content { background: #dcefe4; color: #3a8a67; }
+.course-sky .course-content { background: #ddebf4; color: #4c8aa8; }
+.course-peach .course-content { background: #f7e5d7; color: #c57d52; }
+.course-lavender .course-content { background: #e8e2f3; color: #8370b2; }
+.course-lemon .course-content { background: #f5edc8; color: #b89c36; }
+.course-rose .course-content { background: #f4dfe0; color: #bf6d74; }
+
+.schedule-footer { display: flex; min-height: 48px; align-items: center; justify-content: space-between; padding: 0 20px; background: #fafbf7; color: #8a9692; font-size: 10px; letter-spacing: .03em; }
+.status-dot { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: #65a884; box-shadow: 0 0 0 4px #e3efe8; }
+.page-note { margin: 23px auto 0; color: #8a9792; font-family: Georgia, "Songti SC", serif; font-size: 12px; letter-spacing: .16em; text-align: center; }
+
+.modal-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 20px; background: rgb(26 44 38 / 42%); backdrop-filter: blur(5px); animation: fade-in .18s ease-out; }
+.course-modal { width: min(510px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; border: 1px solid rgb(255 255 255 / 60%); border-radius: 22px; background: var(--paper); box-shadow: 0 28px 90px rgb(19 40 33 / 28%); animation: modal-in .2s ease-out; }
+.modal-heading { display: flex; align-items: flex-start; justify-content: space-between; padding: 25px 26px 19px; border-bottom: 1px solid #e6ebe7; }
+.modal-heading p { margin: 0 0 5px; color: var(--green); font-size: 11px; font-weight: 800; letter-spacing: .08em; }
+.modal-heading h2 { margin: 0; font-family: Georgia, "Songti SC", serif; font-size: 25px; font-weight: 600; }
+.close-button { width: 34px; height: 34px; border: 0; border-radius: 50%; background: #eff3ef; color: #6c7975; cursor: pointer; font-size: 21px; line-height: 1; }
+.course-modal form { padding: 23px 26px 26px; }
+.field { display: block; margin-bottom: 18px; }
+.field > span, .color-field legend { display: block; margin-bottom: 8px; color: #465852; font-size: 12px; font-weight: 800; }
+.field input { width: 100%; height: 46px; padding: 0 14px; border: 1px solid #d6e1db; border-radius: 11px; background: white; color: var(--ink); transition: border-color .16s ease, box-shadow .16s ease; }
+.field input::placeholder { color: #aab4b0; }
+.field input:focus { border-color: #73a58f; box-shadow: 0 0 0 4px rgb(47 118 95 / 8%); outline: none; }
+.color-field { padding: 0; margin: 3px 0 25px; border: 0; }
+.color-options { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+.color-options label { cursor: pointer; text-align: center; }
+.color-options input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.color-swatch { display: grid; width: 100%; height: 42px; place-items: center; border: 2px solid transparent; border-radius: 10px; color: #41504b; }
+.color-swatch i { opacity: 0; font-size: 13px; font-style: normal; font-weight: 900; }
+.color-options input:checked + .color-swatch { border-color: var(--green); box-shadow: 0 0 0 3px rgb(47 118 95 / 10%); }
+.color-options input:checked + .color-swatch i { opacity: 1; }
+.color-options small { display: block; margin-top: 5px; color: #89948f; font-size: 9px; }
+.swatch-mint { background: #dcefe4; }
+.swatch-sky { background: #ddebf4; }
+.swatch-peach { background: #f7e5d7; }
+.swatch-lavender { background: #e8e2f3; }
+.swatch-lemon { background: #f5edc8; }
+.swatch-rose { background: #f4dfe0; }
+.modal-actions { display: flex; align-items: center; gap: 9px; }
+.action-spacer { flex: 1; }
+
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes modal-in { from { transform: translateY(8px) scale(.985); opacity: 0; } }
+
+@media (max-width: 700px) {
+  .topbar, .intro, .schedule-card { width: calc(100% - 24px); }
+  .topbar { padding-top: 16px; }
+  .brand small { display: none; }
+  .brand-mark { width: 38px; height: 38px; }
+  .top-actions .button-quiet { display: none; }
+  .button { min-height: 40px; padding: 0 13px; font-size: 12px; }
+  .intro { align-items: center; padding: 34px 1px 19px; }
+  .intro h1 { font-size: 34px; }
+  .intro-copy { max-width: 250px; font-size: 12px; line-height: 1.6; }
+  .week-summary { padding: 8px 11px; }
+  .week-summary span:last-child { display: none; }
+  .schedule-card { border-radius: 16px; }
+  .schedule-scroll { scrollbar-color: #a9beb3 transparent; scrollbar-width: thin; }
+  .schedule-grid { min-width: 820px; }
+  .schedule-grid > .corner-cell { width: 116px; }
+  .schedule-grid > .corner-cell, .schedule-grid > .day-heading { width: calc((100% - 116px) / 5); }
+  .schedule-row { grid-template-columns: 116px repeat(5, minmax(0, 1fr)); }
+  .schedule-footer { justify-content: center; }
+  .schedule-footer span:last-child { display: none; }
+  .page-note { font-size: 10px; }
+  .course-modal form, .modal-heading { padding-left: 19px; padding-right: 19px; }
+  .color-options { grid-template-columns: repeat(3, 1fr); row-gap: 13px; }
+  .modal-actions { flex-wrap: wrap; }
+  .modal-actions .action-spacer { display: none; }
+  .modal-actions .button-danger { margin-right: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+}
+
+================ app/layout.tsx ================
+
+import type { Metadata } from 'next';
+import './globals.css';
+
+export const metadata: Metadata = {
+  metadataBase: new URL('https://xiaokebiao-weekly-2026.hansonzheng2028.chatgpt.site'),
+  title: '小课表｜一周课程安排',
+  description: '简洁好用的每周课程表，轻松记录课程、教室和专属颜色。',
+  openGraph: {
+    title: '小课表｜这一周，清晰可见',
+    description: '简洁好用的每周课程表，轻松记录课程、教室和专属颜色。',
+    type: 'website',
+    images: [
+      {
+        url: '/og.png',
+        width: 1200,
+        height: 630,
+        alt: '小课表——这一周，清晰可见',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: '小课表｜这一周，清晰可见',
+    description: '简洁好用的每周课程表，轻松记录课程、教室和专属颜色。',
+    images: ['/og.png'],
+  },
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="zh-CN">
+      <body>{children}</body>
+    </html>
+  );
+}
+
+================ package.json ================
+
+{
+  "name": "sites-project",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "vinext dev",
+    "build": "vinext build",
+    "start": "vinext start",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
+  },
+  "dependencies": {
+    "next": "16.2.6",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.37.1",
+    "@cloudflare/workers-types": "4.20260515.1",
+    "@openai/sites-vite-plugin": "^0.1.0 || ^0.2.0",
+    "@tailwindcss/postcss": "4.2.1",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "@vitejs/plugin-rsc": "0.5.26",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.6",
+    "react-server-dom-webpack": "19.2.6",
+    "tailwindcss": "4.2.1",
+    "typescript": "5.9.3",
+    "vinext": "1.0.0-beta.3",
+    "vite": "8.0.13",
+    "wrangler": "4.92.0"
+  },
+  "type": "module"
+}
+
+================ vite.config.ts ================
+
+import { sites } from '@openai/sites-vite-plugin';
+import tailwindcss from '@tailwindcss/postcss';
+import vinext from 'vinext';
+import { defineConfig } from 'vite';
+import hostingConfig from './.openai/hosting.json';
+
+const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
+  '00000000-0000-4000-8000-000000000000';
+
+const { d1, r2 } = hostingConfig;
+
+// macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
+const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';
+
+const localBindingConfig = {
+  main: 'vinext/server/app-router-entry',
+  compatibility_flags: ['nodejs_compat'],
+  d1_databases: d1
+    ? [
+        {
+          binding: d1,
+          database_name: 'site-creator-d1',
+          database_id: SITE_CREATOR_PLACEHOLDER_DATABASE_ID,
+        },
+      ]
+    : [],
+  r2_buckets: r2
+    ? [
+        {
+          binding: r2,
+          bucket_name: 'site-creator-r2',
+        },
+      ]
+    : [],
+};
+
+export default defineConfig(async () => {
+  // Keep Wrangler and Miniflare state project-local. These are non-secret tool
+  // settings; application environment belongs in ignored `.env*` files.
+  process.env.WRANGLER_WRITE_LOGS ??= 'false';
+  process.env.WRANGLER_LOG_PATH ??= '.wrangler/logs';
+  process.env.MINIFLARE_REGISTRY_PATH ??= '.wrangler/registry';
+
+  // Wrangler snapshots its log path while the Cloudflare plugin is imported.
+  const { cloudflare } = await import('@cloudflare/vite-plugin');
+
+  return {
+    css: { postcss: { plugins: [tailwindcss()] } },
+    server: isCodexSeatbeltSandbox
+      ? { watch: { useFsEvents: false, usePolling: true } }
+      : undefined,
+    plugins: [
+      vinext(),
+      sites(),
+      cloudflare({
+        viteEnvironment: { name: 'rsc', childEnvironments: ['ssr'] },
+        config: localBindingConfig,
+      }),
+    ],
+  };
+});
